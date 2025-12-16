@@ -2,7 +2,7 @@ defmodule GauntletGoWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :gauntlet_go
 
   socket "/socket", GauntletGoWeb.UserSocket,
-    websocket: [connect_info: [:peer_data], compress: true],
+    websocket: [connect_info: [:peer_data], compress: true, check_origin: false],
     longpoll: false
 
   # The session will be stored in the cookie and signed,
