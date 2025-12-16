@@ -33,7 +33,11 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  host = System.get_env("PHX_HOST") || "example.com"
+  host =
+    case System.get_env("PHX_HOST") do
+      nil -> "localhost"
+      h -> h |> String.trim() |> String.replace(~r/^https?:\/\//, "")
+    end
 
   config :gauntlet_go, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 

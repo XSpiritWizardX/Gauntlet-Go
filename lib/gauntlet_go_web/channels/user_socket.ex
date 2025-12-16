@@ -5,7 +5,12 @@ defmodule GauntletGoWeb.UserSocket do
 
   @impl true
   def connect(params, socket, _connect_info) do
-    player_id = Map.get(params, "player_id") || random_id()
+    player_id =
+      case Map.get(params, "player_id") do
+        id when id in [nil, "", "undefined", "null"] -> random_id()
+        id -> id
+      end
+
     {:ok, assign(socket, :player_id, player_id)}
   end
 

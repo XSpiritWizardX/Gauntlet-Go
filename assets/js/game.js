@@ -48,9 +48,11 @@ function connect() {
 
   state.roomId = roomId
   state.name = name
-  state.socket = new Socket("/socket", {params: {player_id: state.playerId || undefined}})
+  state.socket = new Socket("/socket", {
+    params: {player_id: state.playerId || null}
+  })
   state.socket.connect()
-  const channel = state.socket.channel(`game:${roomId}`, {player_id: state.playerId || undefined, name})
+  const channel = state.socket.channel(`game:${roomId}`, {player_id: state.playerId || null, name})
   channel.on("snapshot", handleSnapshot)
   channel.on("game_over", handleGameOver)
   channel
