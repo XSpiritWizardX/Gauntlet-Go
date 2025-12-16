@@ -31,12 +31,16 @@ defmodule GauntletGo.Rounds.Survival do
   end
 
   def finished?(players, _round_state, elapsed_ms, duration_ms) do
-    alive_count =
-      players
-      |> Map.values()
-      |> Enum.count(& &1.alive?)
+    if map_size(players) == 0 do
+      false
+    else
+      alive_count =
+        players
+        |> Map.values()
+        |> Enum.count(& &1.alive?)
 
-    elapsed_ms >= duration_ms or alive_count <= 1
+      elapsed_ms >= duration_ms or alive_count <= 1
+    end
   end
 
   def on_round_end(players, _round_state) do

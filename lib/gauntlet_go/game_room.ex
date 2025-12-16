@@ -8,6 +8,8 @@ defmodule GauntletGo.GameRoom do
   alias GauntletGo.{Leader, Player, Rounds, Snapshot}
   @tick_ms 100
   @dt @tick_ms / 1000
+  @cycle_ms 300_000
+  @max_players 10
 
   @round_durations %{
     r1_survival: 45_000,
@@ -38,11 +40,13 @@ defmodule GauntletGo.GameRoom do
 
     state = %{
       room_id: room_id,
+      status: :idle,
       round: round,
       round_state: Rounds.init_round(round),
       round_elapsed_ms: 0,
       players: %{},
-      leader_id: nil
+      leader_id: nil,
+      match_started_at_ms: nil
     }
 
     :timer.send_interval(@tick_ms, :tick)
@@ -51,12 +55,24 @@ defmodule GauntletGo.GameRoom do
 
   @impl true
   def handle_call({:join, player_id, name}, _from, state) do
-    players =
-      Map.update(state.players, player_id, Player.new(player_id), fn p ->
-        %{p | name: name || player_id}
-      end)
+    cond do
+      map_size(state.players) >= @max_players ->
+        {:reply, {:error, :room_full}, state}
 
-    {:reply, :ok, update_leader(%{state | players: players})}
+      true ->
+        players =
+          Map.update(state.players, player_id, Player.new(player_id), fn p ->
+            %{p | name: name || player_id}
+          end)
+
+        new_state =
+          state
+          |> Map.put(:players, players)
+          |> maybe_start_match()
+          |> update_leader()
+
+        {:reply, :ok, new_state}
+    end
   end
 
   @impl true
@@ -78,6 +94,8 @@ defmodule GauntletGo.GameRoom do
   def handle_info(:tick, state) do
     state =
       state
+      |> maybe_restart_cycle()
+      |> maybe_start_match()
       |> tick_players()
       |> tick_round()
       |> maybe_advance_round()
@@ -88,58 +106,70 @@ defmodule GauntletGo.GameRoom do
   end
 
   defp tick_players(state) do
-    speed =
-      case state.round do
-        :r3_leak -> 45.0
-        :r2_light -> 36.0
-        _ -> 40.0
-      end
+    if state.status == :idle or map_size(state.players) == 0 do
+      state
+    else
+      speed =
+        case state.round do
+          :r3_leak -> 45.0
+          :r2_light -> 36.0
+          _ -> 40.0
+        end
 
-    bounds =
-      case state.round do
-        :r3_leak -> {130.0, 100.0}
-        _ -> {100.0, 100.0}
-      end
+      bounds =
+        case state.round do
+          :r3_leak -> {130.0, 100.0}
+          _ -> {100.0, 100.0}
+        end
 
-    players =
-      Enum.reduce(state.players, state.players, fn {id, player}, acc ->
-        updated = Player.tick(player, @dt, speed: speed, bounds: bounds)
-        Map.put(acc, id, updated)
-      end)
+      players =
+        Enum.reduce(state.players, state.players, fn {id, player}, acc ->
+          updated = Player.tick(player, @dt, speed: speed, bounds: bounds)
+          Map.put(acc, id, updated)
+        end)
 
-    %{state | players: players}
+      %{state | players: players}
+    end
   end
 
   defp tick_round(state) do
-    %{players: players, round_state: round_state} =
-      Rounds.tick(state.round, state.players, state.round_state, @dt)
-
-    %{
+    if state.status == :idle or map_size(state.players) == 0 do
       state
-      | players: players,
-        round_state: round_state,
-        round_elapsed_ms: state.round_elapsed_ms + @tick_ms
-    }
+    else
+      %{players: players, round_state: round_state} =
+        Rounds.tick(state.round, state.players, state.round_state, @dt)
+
+      %{
+        state
+        | players: players,
+          round_state: round_state,
+          round_elapsed_ms: state.round_elapsed_ms + @tick_ms
+      }
+    end
   end
 
   defp maybe_advance_round(%{round: :done} = state), do: state
 
   defp maybe_advance_round(state) do
-    duration = Map.fetch!(@round_durations, state.round)
-
-    finished? =
-      Rounds.finished?(
-        state.round,
-        state.players,
-        state.round_state,
-        state.round_elapsed_ms,
-        duration
-      )
-
-    if finished? do
-      finish_round(state)
-    else
+    if state.status == :idle or map_size(state.players) == 0 do
       state
+    else
+      duration = Map.fetch!(@round_durations, state.round)
+
+      finished? =
+        Rounds.finished?(
+          state.round,
+          state.players,
+          state.round_state,
+          state.round_elapsed_ms,
+          duration
+        )
+
+      if finished? do
+        finish_round(state)
+      else
+        state
+      end
     end
   end
 
@@ -196,6 +226,47 @@ defmodule GauntletGo.GameRoom do
   defp broadcast_game_over(state, players) do
     topic = "game:#{state.room_id}"
     GauntletGoWeb.Endpoint.broadcast!(topic, "game_over", Snapshot.build_game_over(players))
+  end
+
+  defp maybe_start_match(%{status: :active} = state), do: state
+
+  defp maybe_start_match(state) do
+    if map_size(state.players) > 0 do
+      now = System.system_time(:millisecond)
+
+      players =
+        Enum.into(state.players, %{}, fn {id, p} ->
+          {id, %{Player.reset_for_round(p, {50.0, 50.0}) | score: 0.0}}
+        end)
+
+      %{
+        state
+        | status: :active,
+          round: :r1_survival,
+          round_state: Rounds.init_round(:r1_survival),
+          round_elapsed_ms: 0,
+          match_started_at_ms: now,
+          players: players
+      }
+    else
+      state
+    end
+  end
+
+  defp maybe_restart_cycle(%{status: :idle} = state), do: state
+
+  defp maybe_restart_cycle(state) do
+    now = System.system_time(:millisecond)
+
+    should_restart =
+      state.match_started_at_ms &&
+        now - state.match_started_at_ms >= @cycle_ms
+
+    if should_restart do
+      %{state | status: :idle}
+    else
+      state
+    end
   end
 
   defp via(room_id), do: {:via, Registry, {GauntletGo.RoomRegistry, room_id}}

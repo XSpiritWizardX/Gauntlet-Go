@@ -36,7 +36,13 @@ defmodule GauntletGo.Rounds.Light do
     %{players: players, round_state: round_state}
   end
 
-  def finished?(_players, _round_state, elapsed_ms, duration_ms), do: elapsed_ms >= duration_ms
+  def finished?(players, _round_state, elapsed_ms, duration_ms) do
+    if map_size(players) == 0 do
+      false
+    else
+      elapsed_ms >= duration_ms
+    end
+  end
 
   def on_round_end(players, round_state) do
     case round_state.light_owner do

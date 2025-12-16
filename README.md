@@ -2,6 +2,8 @@
 
 Mobile-first, 10-player party gauntlet built with Phoenix Channels. Three rounds, one winner, live leader crown.
 
+Match loop: up to 10 players per room, auto-starts when someone joins, auto-restarts a fresh gauntlet every 5 minutes (scores reset each gauntlet).
+
 ## Rounds
 - **Round 1 – Survival Rush:** +1 point/sec while alive, bonus pickups, hazards knock you out, last standing gets +15.
 - **Round 2 – Carry the Light:** Carry = +2/sec, assists = +1/sec, steals = +5, final carrier +10. Help or betray at will.

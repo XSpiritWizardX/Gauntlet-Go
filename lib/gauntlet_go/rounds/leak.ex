@@ -41,10 +41,14 @@ defmodule GauntletGo.Rounds.Leak do
   end
 
   def finished?(players, round_state, elapsed_ms, duration_ms) do
-    everyone_done? =
-      map_size(players) > 0 and MapSet.size(round_state.finished) == map_size(players)
+    if map_size(players) == 0 do
+      false
+    else
+      everyone_done? =
+        map_size(players) > 0 and MapSet.size(round_state.finished) == map_size(players)
 
-    everyone_done? or elapsed_ms >= duration_ms
+      everyone_done? or elapsed_ms >= duration_ms
+    end
   end
 
   def on_round_end(players, _round_state) do
