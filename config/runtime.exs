@@ -35,17 +35,14 @@ if config_env() == :prod do
 
   host =
     case System.get_env("PHX_HOST") do
-      nil -> "localhost"
+      nil -> "gauntlet-go.onrender.com"
       h -> h |> String.trim() |> String.replace(~r/^https?:\/\//, "")
     end
 
   config :gauntlet_go, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
-  origin_host = host || "localhost"
-  origins = ["//#{origin_host}", "https://#{origin_host}", "//localhost", "//127.0.0.1"]
-
   config :gauntlet_go, GauntletGoWeb.Endpoint,
-    url: [host: origin_host, port: 443, scheme: "https"],
+    url: [host: host, port: 443, scheme: "https"],
     http: [
       # Enable IPv6 and bind on all interfaces.
       # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
@@ -54,7 +51,7 @@ if config_env() == :prod do
       ip: {0, 0, 0, 0, 0, 0, 0, 0},
       port: String.to_integer(System.get_env("PORT", "4000"))
     ],
-    check_origin: origins,
+    check_origin: false,
     secret_key_base: secret_key_base
 
   # ## SSL Support
