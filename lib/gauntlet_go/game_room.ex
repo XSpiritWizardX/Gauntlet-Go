@@ -8,13 +8,14 @@ defmodule GauntletGo.GameRoom do
   alias GauntletGo.{Leader, Player, Rounds, Snapshot}
   @tick_ms 100
   @dt @tick_ms / 1000
-  @cycle_ms 300_000
+  @cycle_ms 360_000
+  @countdown_ms 5_000
   @max_players 10
 
   @round_durations %{
-    r1_survival: 45_000,
-    r2_light: 60_000,
-    r3_leak: 70_000
+    r1_survival: 120_000,
+    r2_light: 120_000,
+    r3_leak: 120_000
   }
 
   def start_link(opts) do
@@ -22,8 +23,8 @@ defmodule GauntletGo.GameRoom do
     GenServer.start_link(__MODULE__, %{room_id: room_id}, name: via(room_id))
   end
 
-  def join(room_id, player_id, name \\ nil) do
-    GenServer.call(via(room_id), {:join, player_id, name})
+  def join(room_id, player_id, name \\ nil, color \\ nil) do
+    GenServer.call(via(room_id), {:join, player_id, name, color})
   end
 
   def leave(room_id, player_id) do
@@ -32,6 +33,10 @@ defmodule GauntletGo.GameRoom do
 
   def input(room_id, player_id, input) do
     GenServer.cast(via(room_id), {:input, player_id, input})
+  end
+
+  def force_round(room_id, round) do
+    GenServer.call(via(room_id), {:force_round, round})
   end
 
   @impl true
@@ -46,7 +51,11 @@ defmodule GauntletGo.GameRoom do
       round_elapsed_ms: 0,
       players: %{},
       leader_id: nil,
-      match_started_at_ms: nil
+      match_started_at_ms: nil,
+      countdown_until_ms: nil,
+      countdown_round: nil,
+      countdown_reset_scores: false,
+      manual_round: nil
     }
 
     :timer.send_interval(@tick_ms, :tick)
@@ -54,15 +63,19 @@ defmodule GauntletGo.GameRoom do
   end
 
   @impl true
-  def handle_call({:join, player_id, name}, _from, state) do
+  def handle_call({:join, player_id, name, color}, _from, state) do
     cond do
-      map_size(state.players) >= @max_players ->
+      map_size(state.players) >= @max_players and not Map.has_key?(state.players, player_id) ->
         {:reply, {:error, :room_full}, state}
 
       true ->
+        chosen_color = unique_color(state.players, player_id, color)
+
         players =
-          Map.update(state.players, player_id, Player.new(player_id), fn p ->
-            %{p | name: name || player_id}
+          Map.update(state.players, player_id, Player.new(player_id, color: chosen_color), fn p ->
+            p
+            |> Map.put(:name, name || player_id)
+            |> Map.put(:color, unique_color(state.players, player_id, color, p.color))
           end)
 
         new_state =
@@ -72,6 +85,18 @@ defmodule GauntletGo.GameRoom do
           |> update_leader()
 
         {:reply, :ok, new_state}
+    end
+  end
+
+  @impl true
+  def handle_call({:force_round, round}, _from, state) do
+    case normalize_round(round) do
+      nil ->
+        {:reply, {:error, :invalid_round}, state}
+
+      round_atom ->
+        state = %{state | manual_round: round_atom}
+        {:reply, :ok, begin_countdown(state, round_atom)}
     end
   end
 
@@ -96,6 +121,7 @@ defmodule GauntletGo.GameRoom do
       state
       |> maybe_restart_cycle()
       |> maybe_start_match()
+      |> tick_countdown()
       |> tick_players()
       |> tick_round()
       |> maybe_advance_round()
@@ -106,14 +132,14 @@ defmodule GauntletGo.GameRoom do
   end
 
   defp tick_players(state) do
-    if state.status == :idle or map_size(state.players) == 0 do
+    if state.status != :active or map_size(state.players) == 0 do
       state
     else
       speed =
         case state.round do
-          :r3_leak -> 45.0
-          :r2_light -> 36.0
-          _ -> 40.0
+          :r3_leak -> 38.0
+          :r2_light -> 32.0
+          _ -> 34.0
         end
 
       bounds =
@@ -133,7 +159,7 @@ defmodule GauntletGo.GameRoom do
   end
 
   defp tick_round(state) do
-    if state.status == :idle or map_size(state.players) == 0 do
+    if state.status != :active or map_size(state.players) == 0 do
       state
     else
       %{players: players, round_state: round_state} =
@@ -151,7 +177,7 @@ defmodule GauntletGo.GameRoom do
   defp maybe_advance_round(%{round: :done} = state), do: state
 
   defp maybe_advance_round(state) do
-    if state.status == :idle or map_size(state.players) == 0 do
+    if state.status != :active or map_size(state.players) == 0 do
       state
     else
       duration = Map.fetch!(@round_durations, state.round)
@@ -180,7 +206,8 @@ defmodule GauntletGo.GameRoom do
     %{
       state
       | round: :done,
-        players: players
+        players: players,
+        manual_round: nil
     }
   end
 
@@ -188,25 +215,36 @@ defmodule GauntletGo.GameRoom do
     next_round = next_round(state.round)
     players = Rounds.on_round_end(state.round, state.players, state.round_state)
 
-    %{
-      state
-      | round: next_round,
-        round_state: Rounds.init_round(next_round),
-        round_elapsed_ms: 0,
-        players: reset_players_for_round(players, next_round)
-    }
+    begin_countdown(%{state | players: players}, next_round)
   end
 
-  defp reset_players_for_round(players, :r1_survival),
-    do: Enum.into(players, %{}, fn {id, p} -> {id, Player.reset_for_round(p, {50.0, 50.0})} end)
+  defp reset_players_for_round(players, round, reset_scores \\ false)
 
-  defp reset_players_for_round(players, :r2_light),
-    do: Enum.into(players, %{}, fn {id, p} -> {id, Player.reset_for_round(p, {50.0, 50.0})} end)
+  defp reset_players_for_round(players, :r1_survival, reset_scores) do
+    Enum.into(players, %{}, fn {id, p} ->
+      player = Player.reset_for_round(p, {50.0, 50.0})
+      player = if reset_scores, do: %{player | score: 0.0}, else: player
+      {id, player}
+    end)
+  end
 
-  defp reset_players_for_round(players, :r3_leak),
-    do: Enum.into(players, %{}, fn {id, p} -> {id, Player.reset_for_round(p, {0.0, 50.0})} end)
+  defp reset_players_for_round(players, :r2_light, reset_scores) do
+    Enum.into(players, %{}, fn {id, p} ->
+      player = Player.reset_for_round(p, {50.0, 50.0})
+      player = if reset_scores, do: %{player | score: 0.0}, else: player
+      {id, player}
+    end)
+  end
 
-  defp reset_players_for_round(players, _), do: players
+  defp reset_players_for_round(players, :r3_leak, reset_scores) do
+    Enum.into(players, %{}, fn {id, p} ->
+      player = Player.reset_for_round(p, {0.0, 50.0})
+      player = if reset_scores, do: %{player | score: 0.0}, else: player
+      {id, player}
+    end)
+  end
+
+  defp reset_players_for_round(players, _round, _reset_scores), do: players
 
   defp next_round(:r1_survival), do: :r2_light
   defp next_round(:r2_light), do: :r3_leak
@@ -228,32 +266,21 @@ defmodule GauntletGo.GameRoom do
     GauntletGoWeb.Endpoint.broadcast!(topic, "game_over", Snapshot.build_game_over(players))
   end
 
-  defp maybe_start_match(%{status: :active} = state), do: state
+  defp maybe_start_match(%{status: status} = state) when status != :idle, do: state
+  defp maybe_start_match(%{manual_round: round} = state) when not is_nil(round), do: state
+  defp maybe_start_match(%{round: round} = state) when round not in [:r1_survival, :done],
+    do: state
 
   defp maybe_start_match(state) do
-    if map_size(state.players) > 0 do
-      now = System.system_time(:millisecond)
-
-      players =
-        Enum.into(state.players, %{}, fn {id, p} ->
-          {id, %{Player.reset_for_round(p, {50.0, 50.0}) | score: 0.0}}
-        end)
-
-      %{
-        state
-        | status: :active,
-          round: :r1_survival,
-          round_state: Rounds.init_round(:r1_survival),
-          round_elapsed_ms: 0,
-          match_started_at_ms: now,
-          players: players
-      }
+    if map_size(state.players) >= @max_players do
+      begin_countdown(state, :r1_survival, reset_scores: true)
     else
       state
     end
   end
 
   defp maybe_restart_cycle(%{status: :idle} = state), do: state
+  defp maybe_restart_cycle(%{round: round} = state) when round != :done, do: state
 
   defp maybe_restart_cycle(state) do
     now = System.system_time(:millisecond)
@@ -269,7 +296,104 @@ defmodule GauntletGo.GameRoom do
     end
   end
 
+  defp tick_countdown(%{status: :countdown, countdown_until_ms: until_ms} = state)
+       when is_integer(until_ms) do
+    now = System.system_time(:millisecond)
+
+    if now >= until_ms do
+      start_round(state)
+    else
+      state
+    end
+  end
+
+  defp tick_countdown(state), do: state
+
+  defp start_round(%{countdown_round: round} = state) when round in [:r1_survival, :r2_light, :r3_leak] do
+    now = System.system_time(:millisecond)
+    match_started_at_ms =
+      if state.countdown_reset_scores or is_nil(state.match_started_at_ms) do
+        now
+      else
+        state.match_started_at_ms
+      end
+
+    %{
+      state
+      | status: :active,
+        round: round,
+        round_state: Rounds.init_round(round),
+        round_elapsed_ms: 0,
+        countdown_until_ms: nil,
+        countdown_round: nil,
+        countdown_reset_scores: false,
+        manual_round: nil,
+        match_started_at_ms: match_started_at_ms
+    }
+  end
+
+  defp start_round(state),
+    do: %{
+      state
+      | status: :active,
+        countdown_until_ms: nil,
+        countdown_round: nil,
+        manual_round: nil
+    }
+
+  defp begin_countdown(state, round, opts \\ []) do
+    reset_scores = Keyword.get(opts, :reset_scores, false)
+    now = System.system_time(:millisecond)
+
+    %{
+      state
+      | status: :countdown,
+        round: round,
+        round_state: Rounds.init_round(round),
+        round_elapsed_ms: 0,
+        countdown_until_ms: now + @countdown_ms,
+        countdown_round: round,
+        countdown_reset_scores: reset_scores,
+        players: reset_players_for_round(state.players, round, reset_scores)
+    }
+  end
+
   defp via(room_id), do: {:via, Registry, {GauntletGo.RoomRegistry, room_id}}
+
+  defp unique_color(players, player_id, desired_color, current_color \\ nil) do
+    taken =
+      players
+      |> Enum.reject(fn {id, _player} -> id == player_id end)
+      |> Enum.map(fn {_id, player} -> player.color end)
+      |> MapSet.new()
+
+    available =
+      Player.colors()
+      |> Enum.reject(fn color -> MapSet.member?(taken, color) end)
+
+    desired_valid = Player.valid_color?(desired_color)
+    desired_free = desired_valid and not MapSet.member?(taken, desired_color)
+
+    current_valid = Player.valid_color?(current_color)
+    current_free = current_valid and not MapSet.member?(taken, current_color)
+
+    cond do
+      desired_free -> desired_color
+      current_free -> current_color
+      available != [] -> List.first(available)
+      desired_valid -> desired_color
+      current_valid -> current_color
+      true -> List.first(Player.colors())
+    end
+  end
+
+  defp normalize_round("r1_survival"), do: :r1_survival
+  defp normalize_round("r2_light"), do: :r2_light
+  defp normalize_round("r3_leak"), do: :r3_leak
+  defp normalize_round(:r1_survival), do: :r1_survival
+  defp normalize_round(:r2_light), do: :r2_light
+  defp normalize_round(:r3_leak), do: :r3_leak
+  defp normalize_round(_), do: nil
 
   defp sanitize_input(%{"move" => [mx, my], "jump" => jump, "action" => action}) do
     %{move: {mx * 1.0, my * 1.0}, jump: !!jump, action: !!action}

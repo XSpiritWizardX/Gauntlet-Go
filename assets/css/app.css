@@ -120,6 +120,26 @@ body {
   box-shadow: 0 15px 45px rgba(0, 0, 0, 0.35);
 }
 
+#game-controls {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  z-index: 10;
+}
+
+.joystick-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  border-radius: 20px;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.45);
+}
+
 .control-panel {
   display: grid;
   grid-template-columns: 1fr;
@@ -185,6 +205,7 @@ body {
   justify-content: center;
   text-align: center;
   border-radius: 16px;
+  z-index: 20;
 }
 
 #game-over-card {
@@ -194,4 +215,85 @@ body {
   border: 1px solid rgba(148, 163, 184, 0.2);
   width: min(500px, 90vw);
   box-shadow: 0 15px 35px rgba(0, 0, 0, 0.45);
+}
+
+#round-countdown {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.72);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  border-radius: 16px;
+  z-index: 15;
+}
+
+#round-countdown-card {
+  background: rgba(15, 23, 42, 0.85);
+  padding: 20px 28px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.4);
+}
+
+@media (max-width: 1024px) {
+  #game-controls {
+    position: absolute;
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
+    margin-top: 0;
+    align-items: flex-end;
+    pointer-events: none;
+  }
+
+  #game-controls .joystick-shell,
+  #game-controls .action-buttons {
+    pointer-events: auto;
+  }
+
+  .action-buttons {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .action-btn {
+    min-width: 110px;
+    padding: 12px 14px;
+    font-size: 0.95rem;
+  }
+
+  #joystick-area {
+    width: 130px;
+    height: 130px;
+  }
+
+  #joystick-thumb {
+    width: 52px;
+    height: 52px;
+  }
+}
+
+@media (max-width: 640px) {
+  #game-canvas {
+    height: 360px;
+  }
+
+  #joystick-area {
+    width: 110px;
+    height: 110px;
+  }
+
+  #joystick-thumb {
+    width: 44px;
+    height: 44px;
+  }
+
+  .action-btn {
+    min-width: 96px;
+    padding: 10px 12px;
+    font-size: 0.85rem;
+  }
 }

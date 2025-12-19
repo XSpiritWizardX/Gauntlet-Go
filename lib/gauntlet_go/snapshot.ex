@@ -6,6 +6,8 @@ defmodule GauntletGo.Snapshot do
       round: state.round,
       leader_id: state.leader_id,
       round_elapsed_ms: state.round_elapsed_ms,
+      countdown_ms: countdown_ms(state),
+      countdown_round: state.countdown_round,
       players: serialize_players(state.players),
       round_state: serialize_round_state(state.round, state.round_state)
     }
@@ -46,8 +48,14 @@ defmodule GauntletGo.Snapshot do
   end
 
   defp serialize_round_state(:r2_light, rs) do
+    light_pos =
+      case rs.light_pos do
+        {x, y} -> [x, y]
+        _ -> [50.0, 50.0]
+      end
+
     %{
-      light_pos: tuple_to_list(rs.light_pos),
+      light_pos: light_pos,
       light_owner: rs.light_owner
     }
   end
@@ -55,7 +63,10 @@ defmodule GauntletGo.Snapshot do
   defp serialize_round_state(:r3_leak, rs) do
     %{
       finished: MapSet.to_list(rs.finished),
-      obstacles: Enum.map(rs.obstacles, fn ob -> %{x1: ob.x1, x2: ob.x2} end),
+      obstacles:
+        Enum.map(rs.obstacles, fn ob ->
+          %{x1: ob.x1, x2: ob.x2, y1: ob.y1, y2: ob.y2}
+        end),
       finish_x: 120.0
     }
   end
@@ -66,4 +77,12 @@ defmodule GauntletGo.Snapshot do
   defp tuple_to_list({a, b}), do: [a, b]
 
   defp round_score(score), do: Float.round(score, 1)
+
+  defp countdown_ms(%{status: :countdown, countdown_until_ms: until_ms})
+       when is_integer(until_ms) do
+    now = System.system_time(:millisecond)
+    max(until_ms - now, 0)
+  end
+
+  defp countdown_ms(_state), do: 0
 end

@@ -14,13 +14,15 @@ defmodule GauntletGo.Rounds.Light do
   def tick(players, round_state, dt) do
     chaos_timer = round_state.chaos_timer + trunc(dt * 1000)
     elapsed_ms = round_state.elapsed_ms + trunc(dt * 1000)
+    light_pos = round_state.light_pos || {50.0, 50.0}
+    light_owner = round_state.light_owner
 
+    players = reset_carry_flags(players, light_owner)
     {players, light_owner, light_pos} =
-      players
-      |> reset_carry_flags(round_state.light_owner)
-      |> award_carry_and_assists(round_state.light_owner, dt, round_state.light_pos)
-      |> maybe_pickup_unowned(round_state.light_owner, round_state.light_pos)
-      |> maybe_resolve_steals()
+      award_carry_and_assists(players, light_owner, dt, light_pos)
+
+    {players, light_owner, light_pos} = maybe_pickup_unowned(players, light_owner, light_pos)
+    {players, light_owner, light_pos} = maybe_resolve_steals(players, light_owner, light_pos)
 
     {light_owner, light_pos, chaos_timer} =
       maybe_chaos(light_owner, light_pos, chaos_timer)
@@ -50,9 +52,15 @@ defmodule GauntletGo.Rounds.Light do
         players
 
       owner ->
-        Map.update!(players, owner, fn p ->
-          %{p | score: p.score + 10.0, carrying_light?: false}
-        end)
+        case Map.get(players, owner) do
+          nil ->
+            players
+
+          _player ->
+            Map.update!(players, owner, fn p ->
+              %{p | score: p.score + 10.0, carrying_light?: false}
+            end)
+        end
     end
   end
 
@@ -67,21 +75,27 @@ defmodule GauntletGo.Rounds.Light do
   end
 
   defp award_carry_and_assists(players, owner, dt, light_pos) do
-    players =
-      Enum.into(players, %{}, fn {id, p} ->
-        cond do
-          id == owner ->
-            {id, %{p | score: p.score + @carry_rate * dt, carrying_light?: true, pos: p.pos}}
+    owner_position = owner_pos(players, owner)
 
-          distance(p.pos, owner_pos(players, owner)) <= @steal_radius ->
-            {id, %{p | score: p.score + @assist_rate * dt}}
+    if is_nil(owner_position) do
+      {players, nil, light_pos}
+    else
+      players =
+        Enum.into(players, %{}, fn {id, p} ->
+          cond do
+            id == owner ->
+              {id, %{p | score: p.score + @carry_rate * dt, carrying_light?: true, pos: p.pos}}
 
-          true ->
-            {id, p}
-        end
-      end)
+            distance(p.pos, owner_position) <= @steal_radius ->
+              {id, %{p | score: p.score + @assist_rate * dt}}
 
-    {players, owner, owner_pos(players, owner) || light_pos}
+            true ->
+              {id, p}
+          end
+        end)
+
+      {players, owner, owner_position}
+    end
   end
 
   defp maybe_pickup_unowned(players, owner, light_pos) when not is_nil(owner),
@@ -108,31 +122,37 @@ defmodule GauntletGo.Rounds.Light do
   defp maybe_resolve_steals(players, nil, light_pos), do: {players, nil, light_pos}
 
   defp maybe_resolve_steals(players, owner, light_pos) do
-    attackers =
-      players
-      |> Enum.filter(fn {id, p} ->
-        id != owner and p.input.action and
-          distance(p.pos, owner_pos(players, owner)) <= @steal_radius
-      end)
+    owner_position = owner_pos(players, owner)
 
-    steal_strength =
-      case length(attackers) do
-        0 -> 0.0
-        1 -> 0.45
-        n -> 0.45 + 0.15 * (n - 1)
-      end
-
-    if steal_strength > 0 && :rand.uniform() < steal_strength do
-      {new_owner_id, new_owner} = Enum.random(attackers)
-
-      players =
-        players
-        |> Map.update!(owner, fn p -> %{p | carrying_light?: false} end)
-        |> Map.update!(new_owner_id, fn p -> %{p | carrying_light?: true} end)
-
-      {players, new_owner_id, new_owner.pos}
+    if is_nil(owner_position) do
+      {players, nil, light_pos}
     else
-      {players, owner, light_pos}
+      attackers =
+        players
+        |> Enum.filter(fn {id, p} ->
+          id != owner and p.input.action and
+            distance(p.pos, owner_position) <= @steal_radius
+        end)
+
+      steal_strength =
+        case length(attackers) do
+          0 -> 0.0
+          1 -> 0.45
+          n -> 0.45 + 0.15 * (n - 1)
+        end
+
+      if steal_strength > 0 && :rand.uniform() < steal_strength do
+        {new_owner_id, new_owner} = Enum.random(attackers)
+
+        players =
+          players
+          |> Map.update!(owner, fn p -> %{p | carrying_light?: false} end)
+          |> Map.update!(new_owner_id, fn p -> %{p | carrying_light?: true} end)
+
+        {players, new_owner_id, new_owner.pos}
+      else
+        {players, owner, light_pos}
+      end
     end
   end
 
@@ -146,7 +166,9 @@ defmodule GauntletGo.Rounds.Light do
     {nil, pos, 0}
   end
 
-  defp distance({x1, y1}, {x2, y2}) do
+  defp distance(pos_a, pos_b) do
+    {x1, y1} = normalize_pos(pos_a)
+    {x2, y2} = normalize_pos(pos_b)
     :math.sqrt(:math.pow(x1 - x2, 2) + :math.pow(y1 - y2, 2))
   end
 
@@ -158,9 +180,13 @@ defmodule GauntletGo.Rounds.Light do
   defp owner_pos(players, owner) do
     case Map.get(players, owner) do
       nil -> nil
-      %{pos: pos} -> pos
+      %{pos: pos} -> normalize_pos(pos)
     end
   end
+
+  defp normalize_pos({x, y}) when is_number(x) and is_number(y), do: {x * 1.0, y * 1.0}
+  defp normalize_pos([x, y]) when is_number(x) and is_number(y), do: {x * 1.0, y * 1.0}
+  defp normalize_pos(_), do: {0.0, 0.0}
 
   defp clamp(val, min, _max) when val < min, do: min
   defp clamp(val, _min, max) when val > max, do: max

@@ -16,7 +16,7 @@ config :gauntlet_go, GauntletGoWeb.Endpoint,
   secret_key_base: "2jg6hs+EL/TfRyr0vnNpNmUFpSRVGK775dKUYSlMZcC8ZZEVe59g/tJZQWcl8zpN",
   watchers: [
     esbuild: {Esbuild, :install_and_run, [:gauntlet_go, ~w(--sourcemap=inline --watch)]},
-    tailwind: {Tailwind, :install_and_run, [:gauntlet_go, ~w(--watch)]}
+    tailwind: {Tailwind, :install_and_run, [:gauntlet_go, ~w(--watch --poll)]}
   ]
 
 # ## SSL Support

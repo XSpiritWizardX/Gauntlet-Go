@@ -7,9 +7,10 @@ defmodule GauntletGoWeb.GameChannel do
   def join("game:" <> room_id, params, socket) do
     player_id = socket.assigns.player_id || params["player_id"] || random_id()
     name = params["name"] || player_id
+    color = params["color"]
 
     with {:ok, _pid} <- Rooms.ensure_room(room_id),
-         :ok <- GameRoom.join(room_id, player_id, name) do
+         :ok <- GameRoom.join(room_id, player_id, name, color) do
       {:ok, %{player_id: player_id},
        assign(socket, room_id: room_id, player_id: player_id, name: name)}
     else
@@ -20,6 +21,12 @@ defmodule GauntletGoWeb.GameChannel do
   @impl true
   def handle_in("input", payload, socket) do
     GameRoom.input(socket.assigns.room_id, socket.assigns.player_id, payload)
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_in("force_round", %{"round" => round}, socket) do
+    _ = GameRoom.force_round(socket.assigns.room_id, round)
     {:noreply, socket}
   end
 

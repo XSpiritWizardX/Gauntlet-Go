@@ -21,13 +21,14 @@ defmodule GauntletGo.Rounds.Survival do
       |> spawn_hazards()
       |> age_hazards(dt)
 
-    players =
+    {players, pickups} =
       players
       |> add_survival_points(dt)
       |> collect_pickups(round_state.pickups)
-      |> apply_hazards(round_state.hazards)
 
-    %{players: players, round_state: round_state}
+    players = apply_hazards(players, round_state.hazards)
+
+    %{players: players, round_state: %{round_state | pickups: pickups}}
   end
 
   def finished?(players, _round_state, elapsed_ms, duration_ms) do
@@ -39,7 +40,7 @@ defmodule GauntletGo.Rounds.Survival do
         |> Map.values()
         |> Enum.count(& &1.alive?)
 
-      elapsed_ms >= duration_ms or alive_count <= 1
+      elapsed_ms >= duration_ms or alive_count == 0
     end
   end
 
@@ -68,15 +69,21 @@ defmodule GauntletGo.Rounds.Survival do
   end
 
   defp collect_pickups(players, pickups) do
-    Enum.reduce(pickups, players, fn pickup, acc ->
-      Enum.reduce(acc, acc, fn {id, p}, inner_acc ->
-        if p.alive? && distance(p.pos, pickup.pos) <= @pickup_radius do
-          Map.put(inner_acc, id, %{p | score: p.score + pickup.value})
-        else
-          inner_acc
-        end
-      end)
+    Enum.reduce(pickups, {players, []}, fn pickup, {acc_players, acc_pickups} ->
+      collector =
+        acc_players
+        |> Enum.find(fn {_id, p} -> p.alive? && distance(p.pos, pickup.pos) <= @pickup_radius end)
+
+      case collector do
+        {id, p} ->
+          updated = Map.put(acc_players, id, %{p | score: p.score + pickup.value})
+          {updated, acc_pickups}
+
+        nil ->
+          {acc_players, [pickup | acc_pickups]}
+      end
     end)
+    |> then(fn {acc_players, remaining} -> {acc_players, Enum.reverse(remaining)} end)
   end
 
   defp apply_hazards(players, hazards) do
@@ -87,7 +94,7 @@ defmodule GauntletGo.Rounds.Survival do
           Enum.any?(hazards, fn hz -> distance(p.pos, hz.pos) <= @hazard_radius end)
 
       if hit? do
-        {id, %{p | alive?: false}}
+        {id, %{p | alive?: false, pos: {-20.0, -20.0}}}
       else
         {id, p}
       end
@@ -101,7 +108,7 @@ defmodule GauntletGo.Rounds.Survival do
       pickup = %{
         id: System.unique_integer([:positive]),
         pos: random_point(),
-        value: Enum.random([3.0, 5.0, 8.0, 10.0])
+        value: 1.0
       }
 
       %{state | pickups: [pickup | state.pickups]}
